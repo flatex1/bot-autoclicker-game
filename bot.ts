@@ -1,11 +1,11 @@
 /**
- * Телеграм-бот для игры с кликами
- * Обрабатывает взаимодействие с пользователями и управляет системой буферизации кликов
+ * Телеграм-бот для игры "Атомный Прогресс"
+ * Обрабатывает взаимодействие с пользователями и управляет игровым процессом
  */
 import { Bot, InlineKeyboard, session, Context, SessionFlavor } from "grammy";
 import { ConvexHttpClient } from "convex/browser";
-import { api } from "./convex/_generated/api";
-import { Id } from "./convex/_generated/dataModel";
+import { api } from "./convex/_generated/api.js";
+import { Id } from "./convex/_generated/dataModel.js";
 
 // Получаем токен и URL из переменных окружения
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -20,549 +20,577 @@ if (!CONVEX_URL) {
   throw new Error("CONVEX_URL не определен в переменных окружения");
 }
 
-// Инициализация клиента Convex
+// Создаем клиент для взаимодействия с Convex
 const convex = new ConvexHttpClient(CONVEX_URL);
 
-/**
- * Система буферизации кликов
- * Оптимизирует количество запросов к базе данных, накапливая клики перед отправкой
- */
-// Буфер для хранения кликов по пользователям
-const clickBuffer = new Map<string, number>(); 
-// Интервал отправки буфера в БД (60 секунд)
-const BUFFER_FLUSH_INTERVAL = 60000; 
-
-/**
- * Добавляет клики пользователя в буфер
- * @param userId ID пользователя в Convex
- * @param amount Количество кликов для добавления (по умолчанию 1)
- */
-function addClickToBuffer(userId: string, amount: number = 1) {
-  const currentClicks = clickBuffer.get(userId) || 0;
-  clickBuffer.set(userId, currentClicks + amount);
-  console.log(`Буфер для ${userId}: ${currentClicks + amount} кликов`);
-}
-
-/**
- * Отправляет накопленные клики конкретного пользователя в базу данных
- * @param userId ID пользователя в Convex
- * @returns Promise, который разрешается когда клики отправлены
- */
-async function flushUserBuffer(userId: string) {
-  const clicks = clickBuffer.get(userId);
-  if (!clicks) return;
-  
-  try {
-    // Отправляем накопленные клики в БД
-    await convex.mutation(api.users.addClicks, {
-      userId: userId as Id<"users">,
-      clicks,
-      source: "buffer_flush"
-    });
-    console.log(`Отправлено ${clicks} кликов для пользователя ${userId}`);
-    
-    // Очищаем буфер этого пользователя после успешной отправки
-    clickBuffer.delete(userId);
-  } catch (error) {
-    console.error(`Ошибка при отправке буфера для ${userId}:`, error);
-  }
-}
-
-/**
- * Отправляет все накопленные клики всех пользователей в базу данных
- * Вызывается периодически и при завершении работы бота
- */
-async function flushAllBuffers() {
-  console.log("Выполняется отправка всех буферизованных кликов...");
-  const userIds = Array.from(clickBuffer.keys());
-  
-  if (userIds.length === 0) {
-    console.log("Буфер пуст, нет кликов для отправки");
-    return;
-  }
-  
-  for (const userId of userIds) {
-    await flushUserBuffer(userId);
-  }
-}
-
-// Запускаем периодическую отправку буфера раз в минуту
-console.log(`Настроена буферизация кликов с интервалом отправки ${BUFFER_FLUSH_INTERVAL / 1000} секунд`);
-setInterval(flushAllBuffers, BUFFER_FLUSH_INTERVAL);
-
-// Определяем тип сессии
+// Интерфейс для сессии пользователя
 interface SessionData {
-  lastInteraction: number;
-  awaitingPromoCode: boolean;
+  userId?: Id<"users">;
+  state?: string;
+  data?: any;
 }
 
-// Расширяем тип контекста
-type MyContext = Context & SessionFlavor<SessionData>;
+// Расширяем контекст бота, включая сессию
+type BotContext = Context & SessionFlavor<SessionData>;
 
-// Создание и настройка экземпляра бота с правильным типом
-const bot = new Bot<MyContext>(BOT_TOKEN);
+// Создаем экземпляр бота
+const bot = new Bot<BotContext>(BOT_TOKEN);
 
-// Добавление сессии для хранения состояний пользователей
+// Буфер для кликов (оптимизация обращений к базе данных)
+const clickBuffer: Record<string, { count: number, lastFlush: number }> = {};
+const CLICK_BUFFER_LIMIT = 10; // Сколько кликов накапливать перед отправкой
+const CLICK_BUFFER_TIMEOUT = 5000; // Таймаут в мс для авто-отправки
+
+// Настраиваем хранение сессий
 bot.use(session({
-  initial: (): SessionData => ({ lastInteraction: Date.now(), awaitingPromoCode: false })
+  initial: (): SessionData => ({
+    state: "idle",
+    data: {}
+  })
 }));
 
-// Глобальный обработчик ошибок
-bot.catch((err) => {
-  console.error("Ошибка в работе бота:", err);
-});
-
-/**
- * Обработка команды /start
- * Инициализирует пользователя и отображает начальный интерфейс
- */
+// Обработка команды /start
 bot.command("start", async (ctx) => {
+  try {
+    // Получаем данные пользователя из Telegram
   const telegramId = ctx.from?.id;
   const username = ctx.from?.username;
   const firstName = ctx.from?.first_name;
   const lastName = ctx.from?.last_name;
-  
-  if (!telegramId) {
-    await ctx.reply("Произошла ошибка при получении данных пользователя. Пожалуйста, попробуйте снова.");
-    return;
-  }
-
-  try {
-    // Определяем IP и генерируем идентификатор сессии
-    const sessionId = `session_${telegramId}_${Date.now()}`;
     
     // Создаем или обновляем пользователя в базе данных
-    const userResult = await convex.mutation(api.users.upsertUser, {
-      telegramId,
+    const result = await convex.mutation(api.users.upsertUser, {
+      telegramId: telegramId!,
       username,
       firstName,
-      lastName,
-      sessionId,
+      lastName
     });
     
-    // Создаем игровую клавиатуру
-    const keyboard = createMainKeyboard();
+    // Сохраняем ID пользователя в сессии
+    ctx.session.userId = result.userId;
     
-    // Приветственное сообщение зависит от того, новый это пользователь или существующий
-    const welcomeMessage = userResult.isNewUser
-      ? `Привет, ${firstName || "игрок"}! 👋\n\nДобро пожаловать в игру-кликер. Нажимай на кнопку, чтобы получать клики.\n\nКупи автокликер, чтобы получать клики автоматически!`
-      : `С возвращением, ${firstName || "игрок"}! 👋\n\nПродолжай кликать или улучшай свой автокликер!`;
-    
-    await ctx.reply(welcomeMessage, { reply_markup: keyboard });
+    // Отправляем приветственное сообщение
+    if (result.isNewUser) {
+      await ctx.reply(
+        `🌟 *Добро пожаловать в "Атомный Прогресс"!* 🌟\n\n` +
+        `Товарищ ${firstName}, вы начинаете путь к научному превосходству! Ваш первый комплекс КОЛЛЕКТИВ-1 уже работает и производит 1 Энергон в секунду.\n\n` +
+        `Используйте кнопку ниже, чтобы производить энергию вручную и развивать свою научную империю!`,
+        {
+          parse_mode: "Markdown",
+          reply_markup: getMainKeyboard()
+        }
+      );
+    } else {
+      const userStatus = await convex.query(api.game.getUserStatus, {
+        userId: result.userId
+      });
+      
+      await ctx.reply(
+        `С возвращением, товарищ ${firstName}!\n\n` +
+        `💡 У вас ${userStatus.energons} Энергонов\n` +
+        `⚛️ Производство: ${userStatus.totalProduction} ед./сек\n` +
+        `⚡ Мощность клика: ${userStatus.clickPower} Энергонов`,
+        {
+          reply_markup: getMainKeyboard()
+        }
+      );
+    }
   } catch (error) {
-    console.error("Ошибка при регистрации пользователя:", error);
-    await ctx.reply("Произошла ошибка при подключении к серверу. Пожалуйста, попробуйте позже.");
+    console.error("Ошибка при обработке команды /start:", error);
+    await ctx.reply("Произошла ошибка при подключении к научной базе. Пожалуйста, попробуйте позже.");
   }
 });
 
-/**
- * Создает основную игровую клавиатуру
- */
-function createMainKeyboard() {
-  return new InlineKeyboard()
-    .text("🎮 Играть", "menu_play")
-    .text("🛍 Магазин", "menu_shop")
-    .row()
-    .text("📊 Статистика", "menu_stats")
-    .text("🏆 Рейтинг", "menu_leaderboard")
-    .row()
-    .text("ℹ️ Помощь", "menu_help")
-    .text("⚙️ Настройки", "menu_settings");
-}
-
-/**
- * Создает клавиатуру для игрового меню
- */
-function createPlayKeyboard() {
-  return new InlineKeyboard()
-    .text("👆 Кликнуть", "click")
-    .text("🔄 Обновить", "refresh_stats")
-    .row()
-    .text("⬅️ Назад", "menu_main");
-}
-
-/**
- * Создает клавиатуру для магазина
- */
-function createShopKeyboard() {
-  return new InlineKeyboard()
-    .text("🤖 Автокликер", "buy_autoclick")
-    .text("⚡️ Бустер x2", "buy_booster")
-    .row()
-    .text("🎲 Бонус", "daily_bonus")
-    .text("🎁 Промокод", "enter_promo")
-    .row()
-    .text("⬅️ Назад", "menu_main");
-}
-
-/**
- * Создает клавиатуру для статистики
- */
-function createStatsKeyboard() {
-  return new InlineKeyboard()
-    .text("📈 Общая", "stats_general")
-    .text("📊 Детальная", "stats_detailed")
-    .row()
-    .text("📅 История", "stats_history")
-    .text("🏅 Достижения", "stats_achievements")
-    .row()
-    .text("⬅️ Назад", "menu_main");
-}
-
-/**
- * Обработка всех нажатий на инлайн-кнопки
- */
-bot.on("callback_query:data", async (ctx) => {
-  const callbackData = ctx.callbackQuery.data;
-  const telegramId = ctx.from.id;
-  
+// Обработка команды /profile - статистика пользователя
+bot.command("profile", async (ctx) => {
   try {
-    // Получаем данные пользователя
+    if (!ctx.session.userId) {
+      return ctx.reply("Пожалуйста, начните с команды /start");
+    }
+    
     const user = await convex.query(api.users.getUserByTelegramId, {
-      telegramId,
+      telegramId: ctx.from?.id!
     });
     
     if (!user) {
-      await ctx.answerCallbackQuery("Произошла ошибка. Пожалуйста, начните заново с /start");
-      return;
+      return ctx.reply("Ваш профиль не найден. Пожалуйста, используйте /start для регистрации.");
     }
     
-    // Проверка на блокировку аккаунта
-    if (user.banned) {
-      await ctx.answerCallbackQuery("Ваш аккаунт заблокирован.");
-      return;
+    const userStatus = await convex.query(api.game.getUserStatus, {
+      userId: ctx.session.userId
+    });
+    
+    let boosterInfo = "";
+    if (userStatus.activeBooster) {
+      const minutes = Math.floor(userStatus.activeBooster.timeLeft / 60);
+      const seconds = userStatus.activeBooster.timeLeft % 60;
+      boosterInfo = `\n\n🚀 *Активный бустер:* ${userStatus.activeBooster.name}\n` +
+                    `⏱ Осталось времени: ${minutes}:${seconds.toString().padStart(2, '0')}`;
     }
     
-    // Обновляем время последнего взаимодействия
-    ctx.session.lastInteraction = Date.now();
+    await ctx.reply(
+      `📊 *Профиль научного сотрудника*\n\n` +
+      `👤 *${user.firstName || "Товарищ"}*\n` +
+      `💡 *Энергоны:* ${userStatus.energons}\n` +
+      `🔬 *Нейтроны:* ${userStatus.neutrons}\n` +
+      `✨ *Квантовые частицы:* ${userStatus.particles}\n\n` +
+      `⚡ *Мощность клика:* ${userStatus.clickPower}\n` +
+      `⚛️ *Производство:* ${userStatus.totalProduction} ед./сек${boosterInfo}`,
+      {
+        parse_mode: "Markdown",
+        reply_markup: getMainKeyboard()
+      }
+    );
+  } catch (error) {
+    console.error("Ошибка при получении профиля:", error);
+    await ctx.reply("Произошла ошибка при загрузке профиля. Пожалуйста, попробуйте позже.");
+  }
+});
+
+// Обработка команды /complexes - просмотр и улучшение комплексов
+bot.command("complexes", async (ctx) => {
+  try {
+    if (!ctx.session.userId) {
+      return ctx.reply("Пожалуйста, начните с команды /start");
+    }
     
-    // Обрабатываем различные типы действий
-    switch (callbackData) {
-      // Главное меню
-      case "menu_main":
-        await ctx.editMessageText("🎮 Главное меню", { 
-          reply_markup: createMainKeyboard() 
-        });
-        break;
+    await showComplexesMenu(ctx);
+  } catch (error) {
+    console.error("Ошибка при загрузке комплексов:", error);
+    await ctx.reply("Произошла ошибка при доступе к научным комплексам. Пожалуйста, попробуйте позже.");
+  }
+});
 
-      // Игровое меню
-      case "menu_play":
-        await ctx.editMessageText(
-          "🎮 Игровое меню\n\n" +
-          `Текущий баланс: ${user.clicks + (clickBuffer.get(user._id) || 0)} кликов\n` +
-          `Автокликер: ${user.autoClicksPerSecond} кликов/сек`,
-          { reply_markup: createPlayKeyboard() }
-        );
-        break;
+// Обработка команды /boosters - управление бустерами
+bot.command("boosters", async (ctx) => {
+  try {
+    if (!ctx.session.userId) {
+      return ctx.reply("Пожалуйста, начните с команды /start");
+    }
+    
+    await showBoostersMenu(ctx);
+  } catch (error) {
+    console.error("Ошибка при загрузке бустеров:", error);
+    await ctx.reply("Произошла ошибка при доступе к разработкам. Пожалуйста, попробуйте позже.");
+  }
+});
 
-      // Магазин
-      case "menu_shop":
-        const upgradeCost = await convex.query(api.game.getUpgradeCost, {
-          userId: user._id as Id<"users">,
-          upgradeType: "autoclick",
-        });
-        await ctx.editMessageText(
-          "🛍 Магазин улучшений\n\n" +
-          `💰 Ваш баланс: ${user.clicks} кликов\n` +
-          `🤖 Стоимость улучшения автокликера: ${upgradeCost} кликов\n` +
-          `⚡️ Бустер x2 (30 минут): 1000 кликов\n` +
-          `🎲 Бонус доступен через: 12:34:56`,
-          { reply_markup: createShopKeyboard() }
-        );
-        break;
-
-      // Статистика
-      case "menu_stats":
-        await ctx.editMessageText(
-          "📊 Меню статистики\n\n" +
-          "Выберите тип статистики:",
-          { reply_markup: createStatsKeyboard() }
-        );
-        break;
-
-      // Новые обработчики
-      case "daily_bonus":
-        await handleDailyBonus(ctx, user);
-        break;
-
-      case "enter_promo":
-        await handlePromoCode(ctx, user);
-        break;
-
-      case "stats_achievements":
-        await handleAchievements(ctx, user);
-        break;
-
-      case "buy_booster":
-        await handleBuyBooster(ctx, user);
-        break;
-
-      case "refresh_stats":
-        await handleRefreshStats(ctx, user);
-        break;
-
-      // Обработка клика
-      case "click":
-        const clickResult = await convex.mutation(api.users.addClicks, {
-          userId: user._id,
-          clicks: 1,
-          source: "manual_click"
-        });
-        addClickToBuffer(user._id, 1);
-        await ctx.answerCallbackQuery(`+1 клик (${clickBuffer.get(user._id) || 0} в буфере)`);
-        break;
-
-      // Покупка автокликера
-      case "buy_autoclick":
-        const upgradeResult = await convex.mutation(api.game.buyAutoClickUpgrade, {
-          userId: user._id,
-        });
-        if (upgradeResult.success) {
-          await ctx.answerCallbackQuery(
-            `✅ Автокликер улучшен до ${upgradeResult.newLevel} уровня!`
+// Обработка команды /daily - ежедневный бонус
+bot.command("daily", async (ctx) => {
+  try {
+    if (!ctx.session.userId) {
+      return ctx.reply("Пожалуйста, начните с команды /start");
+    }
+    
+    const user = await convex.query(api.users.getUserByTelegramId, {
+      telegramId: ctx.from?.id!
+    });
+    
+    if (user?.dailyBonusClaimed) {
+      await ctx.reply(
+        "🕒 Вы уже получили свой ежедневный бонус!\n\n" +
+        "Возвращайтесь завтра для получения нового бонуса.",
+        {
+          reply_markup: getMainKeyboard()
+        }
           );
         } else {
-          await ctx.answerCallbackQuery(
-            `❌ Недостаточно кликов (нужно ${upgradeResult.cost})`
-          );
+      // Логика получения ежедневного бонуса будет здесь
+      await ctx.reply(
+        "🎁 Поздравляем! Вы получили ежедневный бонус: +500 Энергонов!",
+        {
+          reply_markup: getMainKeyboard()
         }
-        break;
-
-      // Статистика
-      case "stats_general":
-        const stats = await convex.query(api.game.getUserStats, {
-          userId: user._id,
-        });
-        await ctx.editMessageText(
-          "📊 Общая статистика:\n\n" +
-          `Всего кликов: ${stats.totalClicks}\n` +
-          `Уровень автокликера: ${stats.autoClickLevel}\n` +
-          `Клики в секунду: ${stats.clicksPerSecond}`,
-          { reply_markup: createStatsKeyboard() }
-        );
-        break;
-
-      case "stats_detailed":
-        await handleDetailedStats(ctx, user);
-        break;
-
-      case "stats_history":
-        await handleStatsHistory(ctx, user);
-        break;
-
-      case "menu_leaderboard":
-        const leaderboard = await convex.query(api.game.getLeaderboard, {
-          limit: 10,
-        });
-        
-        let leaderboardText = "🏆 Топ игроков:\n\n";
-        leaderboard.forEach((entry, index) => {
-          leaderboardText += `${index + 1}. ${entry.firstName || entry.username || 'Игрок'}: ${entry.clicks} кликов\n`;
-        });
-        
-        await ctx.editMessageText(leaderboardText, {
-          reply_markup: new InlineKeyboard().text("⬅️ Назад", "menu_main")
-        });
-        break;
-
-      case "menu_help":
-        await ctx.editMessageText(
-          "ℹ️ Помощь по игре:\n\n" +
-          "🎮 Кликайте кнопку для получения кликов\n" +
-          "🤖 Купите автокликер для автоматического получения кликов\n" +
-          "⚡️ Используйте бустеры для временного увеличения кликов\n" +
-          "🎁 Активируйте промокоды для получения бонусов\n" +
-          "🎲 Получайте ежедневный бонус\n\n" +
-          "Удачной игры! 🎯",
-          { reply_markup: new InlineKeyboard().text("⬅️ Назад", "menu_main") }
-        );
-        break;
-
-      case "menu_settings":
-        await ctx.editMessageText(
-          "⚙️ Настройки\n\n" +
-          "🔧 Раздел в разработке",
-          { reply_markup: new InlineKeyboard().text("⬅️ Назад", "menu_main") }
-        );
-        break;
+      );
     }
   } catch (error) {
-    // Обработка различных типов ошибок
-    if (error instanceof Error && error.message.includes("message is not modified")) {
-      await ctx.answerCallbackQuery("Контент не изменился");
-    } else {
-      console.error("Ошибка при обработке запроса:", error);
-      await ctx.answerCallbackQuery("Произошла ошибка. Пожалуйста, попробуйте снова.");
-    }
+    console.error("Ошибка при получении ежедневного бонуса:", error);
+    await ctx.reply("Произошла ошибка при получении бонуса. Пожалуйста, попробуйте позже.");
   }
 });
 
-/**
- * Обработчик ежедневного бонуса
- */
-async function handleDailyBonus(ctx: any, user: any) {
-  const bonusResult = await convex.mutation(api.game.claimDailyBonus, {
-    userId: user._id as Id<"users">
-  });
+// Обработка команды /leaderboard - рейтинг игроков
+bot.command("leaderboard", handleLeaderboardCommand);
 
-  if (bonusResult.success) {
-    await ctx.answerCallbackQuery(
-      `Получен бонус: ${bonusResult.amount} кликов!`
+// Обработка команды /help - справка по игре
+bot.command("help", async (ctx) => {
+  await ctx.reply(
+    "📚 *Справка по игре «Атомный Прогресс»* 📚\n\n" +
+    "🔬 *Основы игры:*\n" +
+    "• Нажимайте на кнопку «⚛️ Расщепить атом» для получения Энергонов\n" +
+    "• Используйте Энергоны для строительства и улучшения научных комплексов\n" +
+    "• Комплексы автоматически производят ресурсы даже когда вы не в игре\n\n" +
+    
+    "🏭 *Научные комплексы:*\n" +
+    "• КОЛЛЕКТИВ-1: Базовый генератор Энергонов\n" +
+    "• ЗАРЯ-М: Увеличивает производство всех Энергонов\n" +
+    "• СОЮЗ-АТОМ: Производит Нейтроны для продвинутых исследований\n" +
+    "• КРАСНЫЙ ЦИКЛОТРОН: Увеличивает эффективность кликов\n" +
+    "• АКАДЕМГОРОД-17: Обучает научных сотрудников\n" +
+    "• СПУТНИК-ГАММА: Дает бонусы каждые 30 минут\n" +
+    "• КВАНТ-СИБИРЬ: Генерирует Квантовые Частицы\n\n" +
+    
+    "🔧 *Команды:*\n" +
+    "/start - Начать игру\n" +
+    "/profile - Ваш научный профиль\n" +
+    "/complexes - Ваши научные комплексы\n" +
+    "/boosters - Временные усиления\n" +
+    "/daily - Ежедневный бонус\n" +
+    "/leaderboard - Рейтинг научных империй\n" +
+    "/help - Эта справка\n\n" +
+    
+    "Удачи в построении великой научной империи! 🚀",
+    {
+      parse_mode: "Markdown",
+      reply_markup: getMainKeyboard()
+    }
+  );
+});
+
+// Базовая клавиатура для основных действий
+function getMainKeyboard() {
+  return new InlineKeyboard()
+    .row().text("⚛️ Расщепить атом", "click_atom")
+    .row()
+      .text("🏭 Комплексы", "show_complexes")
+      .text("👤 Профиль", "show_profile")
+    .row()
+      .text("🚀 Разработки", "show_boosters")
+      .text("📊 Рейтинг", "show_leaderboard");
+}
+
+// Обработка колбэков от инлайн кнопок
+bot.on("callback_query:data", async (ctx) => {
+  try {
+    if (!ctx.session.userId) {
+      return ctx.answerCallbackQuery("Необходимо начать игру с команды /start");
+    }
+    
+    const callbackData = ctx.callbackQuery.data;
+    
+    // Обработка клика по атому
+    if (callbackData === "click_atom") {
+      const userId = ctx.session.userId;
+      const userIdStr = userId.toString();
+      
+      // Используем буфер для оптимизации запросов
+      if (!clickBuffer[userIdStr]) {
+        clickBuffer[userIdStr] = { count: 0, lastFlush: Date.now() };
+      }
+      
+      // Увеличиваем счетчик кликов в буфере
+      clickBuffer[userIdStr].count++;
+      
+      // Проверяем, нужно ли отправить клики на сервер
+      const shouldFlush = 
+        clickBuffer[userIdStr].count >= CLICK_BUFFER_LIMIT || 
+        Date.now() - clickBuffer[userIdStr].lastFlush > CLICK_BUFFER_TIMEOUT;
+      
+      if (shouldFlush) {
+        const clickCount = clickBuffer[userIdStr].count;
+        
+        // Получаем информацию о мощности клика пользователя
+        const userStatus = await convex.query(api.game.getUserStatus, {
+          userId: ctx.session.userId
+        });
+        
+        // Рассчитываем, сколько ресурсов получит пользователь за клики
+        const energonsToAdd = Math.floor(clickCount * userStatus.clickPower);
+        
+        // Отправляем клики на сервер
+        await convex.mutation(api.users.addResources, {
+          userId,
+          energons: energonsToAdd,
+          neutrons: 0,
+          particles: 0,
+          source: "manual_click"
+        });
+        
+        // Сбрасываем буфер
+        clickBuffer[userIdStr] = { count: 0, lastFlush: Date.now() };
+        
+        // Отправляем уведомление
+        await ctx.answerCallbackQuery(`⚡ +${energonsToAdd} энергонов!`);
+      } else {
+        // Просто подтверждаем клик
+        await ctx.answerCallbackQuery("⚛️ Атом расщеплен!");
+      }
+      return;
+    }
+    
+    // Обработка других кнопок меню
+    if (callbackData === "show_complexes") {
+      await showComplexesMenu(ctx);
+      return;
+    }
+    
+    if (callbackData === "show_profile") {
+      await ctx.reply("/profile");
+      return;
+    }
+    
+    if (callbackData === "show_boosters") {
+      await showBoostersMenu(ctx);
+      return;
+    }
+    
+    if (callbackData === "show_leaderboard") {
+      await ctx.deleteMessage();
+      await ctx.reply("Загружаю рейтинг...");
+      await handleLeaderboardCommand(ctx);
+      return;
+    }
+    
+    // Если мы дошли сюда, значит колбэк не обработан
+    await ctx.answerCallbackQuery("Неизвестная команда");
+  } catch (error) {
+    console.error("Ошибка при обработке колбэка:", error);
+    await ctx.answerCallbackQuery("Произошла ошибка");
+  }
+});
+
+// Показать меню научных комплексов
+async function showComplexesMenu(ctx: BotContext) {
+  try {
+    // Получаем все доступные комплексы пользователя
+    const complexes = await convex.query(api.game.getUserComplexes, {
+      userId: ctx.session.userId!
+    });
+    
+    // Сортируем комплексы по порядку открытия
+    const sortedComplexes = [
+      "KOLLEKTIV-1", "ZARYA-M", "SOYUZ-ATOM", "KRASNIY-CIKLOTRON", 
+      "AKADEMGOROD-17", "SPUTNIK-GAMMA", "KVANT-SIBIR", "MATERIYA-3", 
+      "MOZG-MACHINA", "POLYUS-K88"
+    ];
+    
+    const keyboard = new InlineKeyboard();
+    
+    let messageText = "🏭 *Ваши научные комплексы:*\n\n";
+    
+    // Добавляем информацию о каждом комплексе
+    for (const complexType of sortedComplexes) {
+      const complex = complexes.find(c => c.type === complexType);
+      
+      if (complex) {
+        // Комплекс уже открыт
+        messageText += `*${complex.name}* (Ур. ${complex.level})\n`;
+        messageText += `⚡ Производит: ${complex.production} ед./сек\n\n`;
+        
+        // Добавляем кнопку улучшения
+        keyboard.row().text(
+          `🔧 Улучшить ${complex.name} (${complex.upgradeCost} Э)`, 
+          `upgrade_complex:${complexType}`
     );
   } else {
-    await ctx.answerCallbackQuery(
-      `Бонус будет доступен через: ${bonusResult.timeLeft}`
-    );
+        // Комплекс еще не открыт
+        const complexInfo = await convex.query(api.game.getComplexUpgradeCost, {
+          userId: ctx.session.userId!,
+          complexType
+        });
+        
+        if (complexInfo.isUnlocked) {
+          // Комплекс доступен для покупки
+          messageText += `*${complexInfo.name}* (Не построен)\n`;
+          messageText += `🔓 Доступен для строительства\n\n`;
+          
+          keyboard.row().text(
+            `🏗 Построить ${complexInfo.name} (${complexInfo.energonCost} Э)`,
+            `buy_complex:${complexType}`
+          );
+        } else if (complexInfo.requiredComplex) {
+          // Комплекс заблокирован, показываем требования
+          messageText += `🔒 *${complexInfo.name}*\n`;
+          messageText += `Требуется: ${complexInfo.requiredComplex} ур. ${complexInfo.requiredLevel}\n\n`;
+        }
+      }
+    }
+    
+    // Добавляем кнопку возврата
+    keyboard.row().text("⬅️ Назад", "back_to_main");
+    
+    await ctx.reply(messageText, {
+      parse_mode: "Markdown",
+      reply_markup: keyboard
+    });
+  } catch (error) {
+    console.error("Ошибка при отображении комплексов:", error);
+    await ctx.reply("Произошла ошибка при загрузке комплексов. Пожалуйста, попробуйте позже.");
   }
 }
 
-/**
- * Обработчик достижений
- */
-async function handleAchievements(ctx: any, user: any) {
-  const achievements = await convex.query(api.game.getUserAchievements, {
-    userId: user._id as Id<"users">
-  });
-
-  let text = "🏅 Ваши достижения:\n\n";
-  achievements.forEach((achievement: any) => {
-    text += `${achievement.completed ? "✅" : "❌"} ${achievement.name}\n`;
-    text += `└ ${achievement.description}\n\n`;
-  });
-
-  await ctx.editMessageText(text, {
-    reply_markup: createStatsKeyboard()
-  });
-}
-
-/**
- * Обработчик промокодов
- */
-async function handlePromoCode(ctx: any, user: any) {
-  // Создаем клавиатуру для отмены
-  const cancelKeyboard = new InlineKeyboard()
-    .text("❌ Отмена", "menu_shop");
-    
-  await ctx.editMessageText(
-    "🎁 Введите промокод:\n\n" +
-    "Отправьте промокод в следующем сообщении или нажмите отмену.",
-    { reply_markup: cancelKeyboard }
-  );
-  
-  // Устанавливаем флаг ожидания промокода
-  ctx.session.awaitingPromoCode = true;
-}
-
-/**
- * Обработчик покупки бустера
- */
-async function handleBuyBooster(ctx: any, user: any) {
+// Показать меню бустеров
+async function showBoostersMenu(ctx: BotContext) {
   try {
-    const result = await convex.mutation(api.game.buyBooster, {
-      userId: user._id as Id<"users">
+    // Получаем доступные бустеры и статус пользователя
+    const userStatus = await convex.query(api.game.getUserStatus, {
+      userId: ctx.session.userId!
     });
     
-    if (result.success) {
-      await ctx.answerCallbackQuery(
-        `✅ Бустер x2 активирован на 30 минут!`
-      );
+    const boosters = await convex.query(api.game.getAvailableBoosters, {
+      userId: ctx.session.userId!
+    });
+    
+    let messageText = "🚀 *Научные разработки (бустеры):*\n\n";
+    
+    // Добавляем информацию об активном бустере, если есть
+    if (userStatus.activeBooster) {
+      const minutes = Math.floor(userStatus.activeBooster.timeLeft / 60);
+      const seconds = userStatus.activeBooster.timeLeft % 60;
+      
+      messageText += `*Активная разработка:* ${userStatus.activeBooster.name}\n`;
+      messageText += `⏱ Осталось времени: ${minutes}:${seconds.toString().padStart(2, '0')}\n\n`;
     } else {
-      await ctx.answerCallbackQuery(
-        result.timeLeft 
-          ? `⏳ У вас уже есть активный бустер (${Math.floor(result.timeLeft / 60)}м)`
-          : `❌ Недостаточно кликов (нужно ${result.cost})`
+      messageText += "*Нет активных разработок*\n\n";
+    }
+    
+    messageText += "Доступные разработки:\n\n";
+    
+    const keyboard = new InlineKeyboard();
+    
+    // Добавляем каждый доступный бустер
+    for (const booster of boosters) {
+      messageText += `🔬 *${booster.name}*\n`;
+      messageText += `${booster.description}\n`;
+      
+      let costText = `${booster.cost.energons} Э`;
+      if (booster.cost.neutrons) costText += ` + ${booster.cost.neutrons} Н`;
+      if (booster.cost.particles) costText += ` + ${booster.cost.particles} КЧ`;
+      
+      messageText += `💰 Стоимость: ${costText}\n\n`;
+      
+      // Проверяем, хватает ли ресурсов
+      let canAfford = userStatus.energons >= booster.cost.energons;
+      if (booster.cost.neutrons) canAfford = canAfford && userStatus.neutrons >= booster.cost.neutrons;
+      if (booster.cost.particles) canAfford = canAfford && userStatus.particles >= booster.cost.particles;
+      
+      if (canAfford && !userStatus.activeBooster) {
+        keyboard.row().text(`Активировать ${booster.name}`, `activate_booster:${booster.type}`);
+      }
+    }
+    
+    // Кнопка возврата
+    keyboard.row().text("⬅️ Назад", "back_to_main");
+    
+    await ctx.reply(messageText, {
+      parse_mode: "Markdown",
+      reply_markup: keyboard
+    });
+  } catch (error) {
+    console.error("Ошибка при отображении бустеров:", error);
+    await ctx.reply("Произошла ошибка при загрузке разработок. Пожалуйста, попробуйте позже.");
+  }
+}
+
+// Обработка всех остальных сообщений
+bot.on("message", async (ctx) => {
+  try {
+    // Если сообщение не обработано другими обработчиками
+    if (!ctx.session.userId) {
+      await ctx.reply("Добро пожаловать! Пожалуйста, начните игру с команды /start");
+      return;
+    }
+    
+    if (ctx.message.text) {
+      await ctx.reply(
+        "Используйте кнопки или команды для взаимодействия с научными системами.\n\n" +
+        "Для получения справки введите /help",
+        {
+          reply_markup: getMainKeyboard()
+        }
       );
     }
   } catch (error) {
-    await ctx.answerCallbackQuery("❌ Ошибка при покупке бустера");
+    console.error("Ошибка при обработке сообщения:", error);
   }
+});
+
+// Функция для периодического сброса буфера кликов
+function flushClickBuffers() {
+  const now = Date.now();
+  
+  for (const userIdStr in clickBuffer) {
+    const buffer = clickBuffer[userIdStr];
+    
+    if (buffer.count > 0 && now - buffer.lastFlush > CLICK_BUFFER_TIMEOUT) {
+      try {
+        // Отправляем накопленные клики
+        convex.mutation(api.users.addResources, {
+          userId: userIdStr as Id<"users">,
+          energons: buffer.count,
+          neutrons: 0,
+          particles: 0,
+          source: "manual_click"
+        });
+        
+        // Сбрасываем буфер
+        clickBuffer[userIdStr] = { count: 0, lastFlush: now };
+      } catch (error) {
+        console.error(`Ошибка при сбросе буфера кликов для ${userIdStr}:`, error);
+      }
+    }
+  }
+  
+  // Повторяем каждые 10 секунд
+  setTimeout(flushClickBuffers, 10000);
 }
 
-/**
- * Обработчик обновления статистики
- */
-async function handleRefreshStats(ctx: any, user: any) {
+// Запускаем периодический сброс буфера
+flushClickBuffers();
+
+// Устанавливаем вебхук или запускаем поллинг в зависимости от конфигурации
+if (process.env.NODE_ENV === "production" && process.env.WEBHOOK_URL) {
+  const webhookUrl = process.env.WEBHOOK_URL;
+  console.log(`Устанавливаем вебхук на ${webhookUrl}`);
+  
+  bot.api.setWebhook(webhookUrl);
+} else {
+  console.log("Запускаем бота в режиме поллинга");
+  bot.start();
+}
+
+// Добавьте функцию в верхней части файла
+async function handleLeaderboardCommand(ctx: BotContext) {
   try {
-    // Получаем актуальные данные пользователя
-    const updatedUser = await convex.query(api.users.getUserByTelegramId, {
-      telegramId: user.telegramId,
-    });
-    
-    if (!updatedUser) {
-      throw new Error("Пользователь не найден");
+    if (!ctx.session.userId) {
+      return ctx.reply("Пожалуйста, начните с команды /start");
     }
     
-    // Получаем статус бустера
-    const boosterStatus = await convex.query(api.game.getBoosterStatus, {
-      userId: updatedUser._id as Id<"users">
+    const leaderboard = await convex.query(api.game.getUsersLeaderboard, {
+      limit: 10 // Показываем топ-10 игроков
     });
     
-    await ctx.editMessageText(
-      "🎮 Игровое меню\n\n" +
-      `💰 Баланс: ${updatedUser.clicks + (clickBuffer.get(updatedUser._id) || 0)} кликов\n` +
-      `🤖 Автокликер: ${updatedUser.autoClicksPerSecond} кликов/сек\n` +
-      (boosterStatus.active 
-        ? `⚡️ Бустер x${boosterStatus.multiplier} (${Math.floor(boosterStatus.timeLeft! / 60)}м)\n`
-        : ""),
-      { reply_markup: createPlayKeyboard() }
-    );
+    if (leaderboard.length === 0) {
+      return ctx.reply("Рейтинг пока формируется. Попробуйте позже.");
+    }
     
-    await ctx.answerCallbackQuery("✅ Статистика обновлена");
+    let leaderboardText = "🏆 *ТОП НАУЧНЫХ ИМПЕРИЙ* 🏆\n\n";
+    
+    leaderboard.forEach((entry: any, index: number) => {
+      const medal = index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : `${index + 1}.`;
+      const name = entry.firstName || entry.username || "Ученый";
+      leaderboardText += `${medal} *${name}*\n`;
+      leaderboardText += `⚛️ ${entry.totalProduction} ед/сек | 💡 ${entry.energons} энергонов\n\n`;
+    });
+    
+    // Добавляем позицию текущего пользователя, если он не в топе
+    const userPosition = await convex.query(api.game.getUserLeaderboardPosition, { 
+      userId: ctx.session.userId 
+    });
+    
+    if (userPosition && userPosition.position > 10) {
+      leaderboardText += `...\n*Ваша позиция:* #${userPosition.position}\n`;
+      leaderboardText += `⚛️ ${userPosition.totalProduction} ед/сек | 💡 ${userPosition.energons} энергонов`;
+    }
+    
+    await ctx.reply(leaderboardText, {
+      parse_mode: "Markdown",
+      reply_markup: getMainKeyboard()
+    });
   } catch (error) {
-    await ctx.answerCallbackQuery("❌ Ошибка при обновлении");
+    console.error("Ошибка при получении рейтинга:", error);
+    await ctx.reply("Произошла ошибка при загрузке рейтинга. Пожалуйста, попробуйте позже.");
   }
 }
 
-/**
- * Обработчик детальной статистики
- */
-async function handleDetailedStats(ctx: any, user: any) {
-  const stats = await convex.query(api.game.getUserDetailedStats, {
-    userId: user._id,
-  });
-  
-  await ctx.editMessageText(
-    "📊 Детальная статистика:\n\n" +
-    `Всего кликов: ${stats.totalClicks}\n` +
-    `Ручные клики: ${stats.manualClicks}\n` +
-    `Авто клики: ${stats.autoClicks}\n` +
-    `Бонусные клики: ${stats.bonusClicks}\n` +
-    `Серия бонусов: ${stats.bonusStreak || 0}`,
-    { reply_markup: createStatsKeyboard() }
-  );
-}
-
-/**
- * Обработчик истории действий
- */
-async function handleStatsHistory(ctx: any, user: any) {
-  const history = await convex.query(api.game.getUserHistory, {
-    userId: user._id,
-  });
-  
-  const historyText = history
-    .map((entry: any) => `${entry.event}: ${entry.value} (${new Date(entry.timestamp).toLocaleString()})`)
-    .join('\n');
-  
-  await ctx.editMessageText(
-    "📅 История действий:\n\n" + historyText,
-    { reply_markup: createStatsKeyboard() }
-  );
-}
-
-// Запускаем бота
-bot.start();
-console.log("Бот запущен и готов к работе!");
-
-// Обработка завершения работы
-process.on('SIGINT', async () => {
-  console.log('Сохранение буферизованных кликов перед выходом...');
-  await flushAllBuffers();
-  process.exit(0);
-});
-
-process.on('SIGTERM', async () => {
-  console.log('Получен сигнал завершения, сохраняем данные...');
-  await flushAllBuffers();
-  process.exit(0);
-});
+export default bot;

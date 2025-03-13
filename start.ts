@@ -5,6 +5,11 @@
 import * as fs from 'fs';
 import * as dotenv from 'dotenv';
 import * as path from 'path';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 // Загружаем переменные окружения из файла .env.local или .env
 function loadEnvironmentVariables() {
@@ -53,8 +58,8 @@ function validateEnvironment() {
 // Загружаем переменные окружения
 loadEnvironmentVariables();
 
-// Импортируем бот (без указания расширения файла)
-import './bot';
+// Импортируем бота только после загрузки переменных окружения
+const bot = await import('./bot.js');
 
 // Обработка завершения процесса
 process.on('SIGINT', () => {
@@ -65,3 +70,7 @@ process.on('SIGINT', () => {
 process.on('unhandledRejection', (reason) => {
   console.error('Необработанное отклонение промиса:', reason);
 });
+
+// Запускаем бота
+console.log('Запуск бота...');
+bot.default.start();
