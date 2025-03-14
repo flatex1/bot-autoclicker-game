@@ -1,25 +1,46 @@
 import { cronJobs } from "convex/server";
-import { internal } from "./_generated/api";
+import { internal } from "./_generated/api.js";
 
 // Настройка регулярных заданий
 const crons = cronJobs();
 
-// Запуск процесса автокликов каждую минуту
-crons.interval("process-autoclicks", { minutes: 1 }, internal.autoclick.processAutoClicks, {});
-
-// Сброс бустеров и проверка достижений каждые 5 минут
+// Запуск процесса производства каждую минуту
 crons.interval(
-  "check-boosters-and-achievements",
-  { minutes: 5 },
-  internal.game.checkBoostersAndAchievements,
+  "process-production",
+  { minutes: 1 },
+  internal.autoclick.processProduction,
   {}
 );
 
-// Сброс серии ежедневных бонусов в полночь
+// Проверка статуса бустеров каждые 5 минут
+crons.interval(
+  "check-boosters-status",
+  { minutes: 5 },
+  internal.autoclick.checkBoostersStatus,
+  {}
+);
+
+// Добавление бонусов со спутников каждые 30 минут
+crons.interval(
+  "satellite-bonus",
+  { minutes: 30 },
+  internal.satellites.processSatelliteBonus,
+  {}
+);
+
+// Сброс ежедневных бонусов в полночь
 crons.cron(
   "reset-daily-bonuses",
   "0 0 * * *", // Каждый день в полночь
-  internal.game.resetDailyBonuses,
+  internal.production.resetDailyBonuses,
+  {}
+);
+
+// Обновление рейтинга каждый час
+crons.interval(
+  "update-leaderboard",
+  { hours: 1 },
+  internal.leaderboard.updateLeaderboard,
   {}
 );
 

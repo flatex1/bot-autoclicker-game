@@ -13,13 +13,15 @@
   },
   "name": "bot-autoclicker-game-1",
   "version": "1.0.0",
-  "main": "dist/bot.js",
+  "main": "dist/start.js",
   "scripts": {
-    "build": "tsc",
-    "start": "ts-node start.ts",
-    "dev": "ts-node start.ts",
+    "build": "tsc && cp -r convex dist/ && cp package.json dist/",
+    "build:w": "tsc && xcopy /E /I convex dist\\convex && copy package.json dist\\",
+    "start": "node dist/start.js",
+    "dev": "convex dev",
     "dev:convex": "convex dev",
-    "dev:bot": "tsc --watch & nodemon dist/start.js"
+    "dev:bot": "nodemon --watch . --ext ts --exec \"node --loader ts-node/esm start.ts\"",
+    "dev:all": "concurrently -k \"npm run dev:convex\" \"npm run dev:bot\""
   },
   "keywords": [
     "telegram",
@@ -30,5 +32,6 @@
   ],
   "author": "",
   "license": "ISC",
-  "description": "Telegram бот-автокликер с использованием Convex и GrammY"
+  "description": "Telegram бот-автокликер с использованием Convex и GrammY",
+  "type": "module"
 }

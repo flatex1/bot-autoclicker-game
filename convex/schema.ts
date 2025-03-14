@@ -1,5 +1,5 @@
 /**
- * Схема базы данных приложения
+ * Схема базы данных приложения "Атомный Прогресс"
  * Определяет структуру таблиц и связи между ними
  */
 import { defineSchema, defineTable } from "convex/server";
@@ -13,86 +13,110 @@ export default defineSchema({
     username: v.optional(v.string()), // Имя пользователя в Telegram
     firstName: v.optional(v.string()), // Имя пользователя
     lastName: v.optional(v.string()), // Фамилия пользователя
-    
-    // Игровая статистика
-    clicks: v.number(), // Текущее количество кликов (валюта)
-    totalClicks: v.number(), // Общее количество кликов за все время
-    
-    // Улучшения
-    autoClickLevel: v.number(), // Уровень автокликера
-    autoClicksPerSecond: v.number(), // Количество кликов в секунду от автокликера
-    
-    // Метаданные
-    lastActivity: v.number(), // Время последней активности (timestamp в мс)
-    createdAt: v.optional(v.number()), // Время создания аккаунта
-    banned: v.optional(v.boolean()), // Флаг блокировки пользователя
-    
-    // Сессия и безопасность
-    sessionId: v.optional(v.string()), // Идентификатор сессии для авторизации
-    lastIp: v.optional(v.string()), // Последний IP адрес
-    
-    // Новые поля для бонусов и бустеров
-    lastBonusTime: v.optional(v.number()), // Время последнего полученного бонуса
-    bonusStreak: v.optional(v.number()), // Серия ежедневных бонусов
-    boosterEndTime: v.optional(v.number()), // Время окончания действия бустера
-    clickMultiplier: v.optional(v.number()), // Текущий множитель кликов
-    
-    // Поля для достижений
-    achievements: v.optional(v.array(v.string())), // Список полученных достижений
-  })
-  .index("by_telegramId", ["telegramId"]) // Для быстрого поиска по telegram ID
-  .index("by_lastActivity", ["lastActivity"]) // Для поиска активных пользователей
-  .index("by_autoClicksPerSecond", ["autoClicksPerSecond"]), // Для поиска пользователей с автокликом
-  
-  // Таблица обновлений и улучшений
-  upgrades: defineTable({
-    userId: v.id("users"), // Ссылка на пользователя
-    type: v.string(), // Тип улучшения (например, "autoclick", "multiplier")
-    level: v.number(), // Уровень улучшения
-    cost: v.number(), // Стоимость улучшения
-    effect: v.number(), // Эффект улучшения
-    purchasedAt: v.number(), // Время покупки
-  })
-  .index("by_userId", ["userId"]) // Для быстрого поиска улучшений пользователя
-  .index("by_userAndType", ["userId", "type"]), // Для поиска конкретных улучшений
-  
-  // Таблица для рейтинга игроков
-  leaderboard: defineTable({
-    userId: v.id("users"), // Ссылка на пользователя
-    clicks: v.number(), // Количество кликов (для сортировки)
-    updatedAt: v.number(), // Время последнего обновления
-  })
-  .index("by_clicks", ["clicks"]) // Для сортировки по кликам
-  .index("by_userId", ["userId"]), // Для обновления записи конкретного пользователя
-  
-  // Таблица событий и статистики
-  statistics: defineTable({
-    userId: v.id("users"), // Ссылка на пользователя
-    event: v.string(), // Тип события: "click", "upgrade", "autoclick" и т.д.
-    value: v.number(), // Значение (кол-во кликов, уровень и т.д.)
-    timestamp: v.number(), // Время события
-    metadata: v.optional(v.string()), // Дополнительные данные в формате JSON
-  })
-  .index("by_userId", ["userId"]) // Для получения всех событий пользователя
-  .index("by_userAndEvent", ["userId", "event"]) // Для фильтрации по типам событий
-  .index("by_timestamp", ["timestamp"]), // Для анализа по времени
 
-  // Новая таблица для промокодов
+    // Основные ресурсы
+    energons: v.number(), // Основная валюта
+    neutrons: v.number(), // Вторичная валюта
+    particles: v.number(), // Престижная валюта
+
+    // Статистика производства
+    totalProduction: v.number(), // Общее производство в секунду
+    productionMultiplier: v.optional(v.number()), // Множитель производства
+
+    // Статистика кликов
+    totalClicks: v.number(), // Общее количество кликов
+    manualClicks: v.number(), // Количество ручных кликов
+    clickMultiplier: v.optional(v.number()), // Множитель кликов
+
+    // Статистика игровой активности
+    lastActivity: v.number(), // Время последней активности
+    createdAt: v.number(), // Время создания аккаунта
+
+    // Бустеры
+    activeBoosterType: v.optional(v.string()), // Тип активного бустера
+    activeBoosterName: v.optional(v.string()), // Имя активного бустера для отображения
+    boosterEndTime: v.optional(v.number()), // Время окончания действия бустера
+
+    // Бонусы
+    dailyBonusClaimed: v.boolean(), // Получен ли ежедневный бонус
+    bonusStreak: v.number(), // Сколько дней подряд получен бонус
+    nextSatelliteBonusTime: v.optional(v.number()), // Время следующего бонуса от спутника
+
+    // Административное
+    banned: v.boolean(), // Забанен ли пользователь
+    isAdmin: v.boolean(), // Является ли пользователь администратором
+  })
+    .index("by_telegramId", ["telegramId"]) // Для быстрого поиска по Telegram ID
+    .index("by_totalProduction", ["totalProduction"]), // Для сортировки по производству
+
+  // Таблица комплексов - научные и производственные комплексы игроков
+  complexes: defineTable({
+    userId: v.id("users"), // ID пользователя
+    type: v.string(), // Тип комплекса (KOLLEKTIV-1, ZARYA-M и т.д.)
+    level: v.number(), // Уровень комплекса
+    production: v.number(), // Производство ресурсов в секунду
+    lastUpgraded: v.number(), // Время последнего улучшения
+    createdAt: v.number(), // Время создания
+  })
+    .index("by_userId", ["userId"]) // Для поиска всех комплексов пользователя
+    .index("by_userAndType", ["userId", "type"]), // Для поиска конкретного комплекса пользователя
+
+  // Таблица рейтинга - для быстрого доступа к отсортированным данным
+  leaderboard: defineTable({
+    userId: v.id("users"), // ID пользователя
+    telegramId: v.number(), // ID пользователя в Telegram
+    username: v.optional(v.string()), // Имя пользователя в Telegram
+    firstName: v.optional(v.string()), // Имя пользователя
+    energons: v.number(), // Количество энергонов
+    totalLevel: v.number(), // Общий уровень всех комплексов
+    totalProduction: v.number(), // Общее производство в секунду
+    createdAt: v.number(), // Время создания записи
+    updatedAt: v.number(), // Время обновления записи
+  })
+    .index("by_userId", ["userId"]) // Для поиска записи конкретного пользователя
+    .index("by_energons", ["energons"]) // Для сортировки по энергонам
+    .index("by_totalProduction", ["totalProduction"]), // Для сортировки по производству
+
+  // Таблица статистики - для отслеживания активности пользователей
+  statistics: defineTable({
+    userId: v.id("users"), // ID пользователя
+    event: v.string(), // Тип события (manual_click, complex_upgrade, etc.)
+    value: v.number(), // Числовое значение события
+    timestamp: v.number(), // Время события
+    metadata: v.optional(v.string()), // Дополнительные данные в JSON
+  })
+    .index("by_userId", ["userId"]) // Для поиска всех событий пользователя
+    .index("by_timestamp", ["timestamp"]), // Для сортировки по времени
+
+  // Таблица сессий - для хранения состояния диалога с ботом
+  sessions: defineTable({
+    userId: v.id("users"), // ID пользователя
+    chatId: v.number(), // ID чата в Telegram
+    state: v.string(), // Текущее состояние сессии
+    data: v.optional(v.string()), // Данные сессии в JSON
+    updatedAt: v.number(), // Время обновления
+  })
+    .index("by_userId", ["userId"]) // Для поиска сессии пользователя
+    .index("by_chatId", ["chatId"]), // Для поиска по ID чата
+
+  // Таблица промокодов
   promoCodes: defineTable({
     code: v.string(), // Код промокода
-    reward: v.number(), // Награда (клики)
+    reward: v.object({
+      energons: v.optional(v.number()),
+      neutrons: v.optional(v.number()),
+      particles: v.optional(v.number()),
+    }), // Награда (ресурсы)
     usageLimit: v.number(), // Лимит использований
     usedCount: v.number(), // Количество использований
     expiresAt: v.optional(v.number()), // Время истечения
     createdAt: v.number(), // Время создания
-  })
-  .index("by_code", ["code"]), // Для быстрого поиска по коду
+  }).index("by_code", ["code"]), // Для быстрого поиска по коду
 
   // Таблица использованных промокодов
   promoUsage: defineTable({
     userId: v.id("users"),
     promoId: v.id("promoCodes"),
     usedAt: v.number(),
-  })
-  .index("by_user_and_promo", ["userId", "promoId"]), // Для проверки использования
-}); 
+  }).index("by_user_and_promo", ["userId", "promoId"]), // Для проверки использования
+});
