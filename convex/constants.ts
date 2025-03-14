@@ -12,6 +12,7 @@ export const COMPLEX_CONFIGS = {
       energons: 100,
     },
     costMultiplier: 1.5,
+    image: "./public/assets/complex_kollektiv.png",
   },
   "ZARYA-M": {
     name: "ЗАРЯ-М",
@@ -23,6 +24,7 @@ export const COMPLEX_CONFIGS = {
     costMultiplier: 1.6,
     requiredComplex: "KOLLEKTIV-1",
     requiredLevel: 3,
+    image: "./public/assets/complex_zarya.png",
   },
   "SOYUZ-ATOM": {
     name: "СОЮЗ-АТОМ",
@@ -35,6 +37,7 @@ export const COMPLEX_CONFIGS = {
     costMultiplier: 1.7,
     requiredComplex: "KOLLEKTIV-1",
     requiredLevel: 5,
+    image: "./public/assets/complex_soyuz.png",
   },
   "KRASNIY-CIKLOTRON": {
     name: "КРАСНЫЙ ЦИКЛОТРОН",
@@ -46,6 +49,7 @@ export const COMPLEX_CONFIGS = {
     costMultiplier: 1.7,
     requiredComplex: "KOLLEKTIV-1",
     requiredLevel: 5,
+    image: "./public/assets/complex_krasniy.png",
   },
   "AKADEMGOROD-17": {
     name: "АКАДЕМГОРОД-17",
@@ -59,6 +63,7 @@ export const COMPLEX_CONFIGS = {
     costMultiplier: 1.8,
     requiredComplex: "SOYUZ-ATOM",
     requiredLevel: 3,
+    image: "./public/assets/complex_akadem.png",
   },
   "SPUTNIK-GAMMA": {
     name: "СПУТНИК-ГАММА",
@@ -71,6 +76,7 @@ export const COMPLEX_CONFIGS = {
     costMultiplier: 2.0,
     requiredComplex: "AKADEMGOROD-17",
     requiredLevel: 2,
+    image: "./public/assets/complex_sputnik.png",
   },
   "KVANT-SIBIR": {
     name: "КВАНТ-СИБИРЬ",
@@ -83,6 +89,7 @@ export const COMPLEX_CONFIGS = {
     costMultiplier: 2.2,
     requiredComplex: "SPUTNIK-GAMMA",
     requiredLevel: 2,
+    image: "./public/assets/complex_kvant.png",
   },
   "MATERIYA-3": {
     name: "МАТЕРИЯ-3",
@@ -95,6 +102,7 @@ export const COMPLEX_CONFIGS = {
     costMultiplier: 2.5,
     requiredComplex: "KVANT-SIBIR",
     requiredLevel: 3,
+    image: "./public/assets/complex_materiya.png",
   },
   "MOZG-MACHINA": {
     name: "МОЗГ-МАШИНА",
@@ -108,6 +116,7 @@ export const COMPLEX_CONFIGS = {
     costMultiplier: 3.0,
     requiredComplex: "MATERIYA-3",
     requiredLevel: 2,
+    image: "./public/assets/complex_mozg.png",
   },
   "POLYUS-K88": {
     name: "ПОЛЮС-К88",
@@ -121,10 +130,12 @@ export const COMPLEX_CONFIGS = {
     costMultiplier: 3.5,
     requiredComplex: "MOZG-MACHINA",
     requiredLevel: 2,
+    image: "./public/assets/complex_polyus.png",
   },
 };
 
 // Конфигурация временных бустеров
+// TODO: Добавить фото бустеров 
 export const BOOSTER_CONFIGS = {
   "PROTON-M87": {
     name: "Протон-М87",
@@ -133,9 +144,12 @@ export const BOOSTER_CONFIGS = {
     multiplier: 3.0, // +200%
     cost: {
       energons: 5000,
+      neutrons: 0,
+      particles: 0,
     },
     requiredComplex: "ZARYA-M",
     requiredLevel: 2,
+    image: "./public/assets/booster_proton.png",
   },
   "RED-STAR": {
     name: "Красная Звезда",
@@ -145,9 +159,11 @@ export const BOOSTER_CONFIGS = {
     cost: {
       energons: 10000,
       neutrons: 500,
+      particles: 0,
     },
     requiredComplex: "SOYUZ-ATOM",
     requiredLevel: 5,
+    image: "./public/assets/booster_red_star.png",
   },
   "ATOMIC-HEART-42": {
     name: "Атомное Сердце-42",
@@ -157,9 +173,11 @@ export const BOOSTER_CONFIGS = {
     cost: {
       energons: 15000,
       neutrons: 1000,
+      particles: 0,
     },
     requiredComplex: "AKADEMGOROD-17",
     requiredLevel: 3,
+    image: "./public/assets/booster_atomic_heart.png",
   },
   "IRON-COMRADE": {
     name: "Железный Товарищ",
@@ -169,9 +187,11 @@ export const BOOSTER_CONFIGS = {
     cost: {
       energons: 20000,
       neutrons: 2000,
+      particles: 0,
     },
     requiredComplex: "SPUTNIK-GAMMA",
     requiredLevel: 3,
+    image: "./public/assets/booster_iron_commrade.png",
   },
   "T-POLYMER": {
     name: "Т-Полимер",
@@ -185,5 +205,6 @@ export const BOOSTER_CONFIGS = {
     },
     requiredComplex: "KVANT-SIBIR",
     requiredLevel: 2,
+    image: "./public/assets/booster_t_polymer.png",
   },
 };

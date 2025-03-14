@@ -2,7 +2,12 @@
  * Операции с пользователями
  * API для создания, обновления и получения данных пользователей
  */
-import { mutation, query, internalQuery, internalMutation } from "./_generated/server";
+import {
+  mutation,
+  query,
+  internalQuery,
+  internalMutation,
+} from "./_generated/server";
 import { v } from "convex/values";
 
 /**
@@ -25,7 +30,7 @@ export const upsertUser = mutation({
       .query("users")
       .withIndex("by_telegramId", (q) => q.eq("telegramId", args.telegramId))
       .unique();
-    
+
     if (existingUser) {
       // Обновляем существующего пользователя
       await ctx.db.patch(existingUser._id, {
@@ -34,7 +39,7 @@ export const upsertUser = mutation({
         lastName: args.lastName,
         lastActivity: Date.now(),
       });
-      
+
       return {
         userId: existingUser._id,
         isNewUser: false,
@@ -47,17 +52,17 @@ export const upsertUser = mutation({
         username: args.username,
         firstName: args.firstName,
         lastName: args.lastName,
-        
+
         // Инициализация ресурсов
         energons: 100, // Стартовое количество энергонов
         neutrons: 0,
         particles: 0,
-        
+
         // Инициализация статистики
         totalProduction: 0,
         totalClicks: 0,
         manualClicks: 0,
-        
+
         // Прочие поля
         lastActivity: now,
         createdAt: now,
@@ -66,7 +71,7 @@ export const upsertUser = mutation({
         banned: false,
         isAdmin: false,
       });
-      
+
       // Создаем начальный комплекс KOLLEKTIV-1
       await ctx.db.insert("complexes", {
         userId,
@@ -76,12 +81,12 @@ export const upsertUser = mutation({
         lastUpgraded: now,
         createdAt: now,
       });
-      
+
       // Обновляем общее производство
       await ctx.db.patch(userId, {
-        totalProduction: 1
+        totalProduction: 1,
       });
-      
+
       // Создаем запись в таблице рейтинга
       await ctx.db.insert("leaderboard", {
         userId,
@@ -94,7 +99,7 @@ export const upsertUser = mutation({
         createdAt: now,
         updatedAt: now,
       });
-      
+
       return {
         userId,
         isNewUser: true,
@@ -131,20 +136,20 @@ export const getUserByTelegramId = query({
       .withIndex("by_telegramId", (q) => q.eq("telegramId", args.telegramId))
       .unique();
 
-      if (!user) return null;
-    
-      return {
-        _id: user._id,
-        telegramId: user.telegramId,
-        username: user.username,
-        firstName: user.firstName,
-        energons: user.energons,
-        neutrons: user.neutrons,
-        particles: user.particles,
-        totalProduction: user.totalProduction,
-        banned: user.banned || false,
-        dailyBonusClaimed: user.dailyBonusClaimed || false,
-      };
+    if (!user) return null;
+
+    return {
+      _id: user._id,
+      telegramId: user.telegramId,
+      username: user.username,
+      firstName: user.firstName,
+      energons: user.energons,
+      neutrons: user.neutrons,
+      particles: user.particles,
+      totalProduction: user.totalProduction,
+      banned: user.banned || false,
+      dailyBonusClaimed: user.dailyBonusClaimed || false,
+    };
   },
 });
 
@@ -162,37 +167,26 @@ export const addResources = mutation({
   handler: async (ctx, args) => {
     const user = await ctx.db.get(args.userId);
     if (!user) throw new Error("Пользователь не найден");
-    
+
     const updates: any = {
-      lastActivity: Date.now()
+      lastActivity: Date.now(),
     };
-    
+
     if (args.energons) {
       updates.energons = user.energons + args.energons;
     }
-    
+
     if (args.neutrons) {
       updates.neutrons = user.neutrons + args.neutrons;
     }
-    
+
     if (args.particles) {
       updates.particles = user.particles + args.particles;
     }
-    
+
     await ctx.db.patch(args.userId, updates);
-    
-    // Записываем в статистику
-    await ctx.db.insert("statistics", {
-      userId: args.userId,
-      event: `resource_gain_${args.source}`,
-      value: args.energons || args.neutrons || args.particles || 0,
-      timestamp: Date.now(),
-      metadata: JSON.stringify({
-        energons: args.energons,
-        neutrons: args.neutrons,
-        particles: args.particles
-      })
-    });
+
+    // TODO: сделать запись в статистику (раз в 6 часов)
   },
 });
 
@@ -206,45 +200,34 @@ export const updateBoostersStatus = internalMutation({
   handler: async (ctx, args) => {
     const user = await ctx.db.get(args.userId);
     if (!user) return;
-    
+
     const now = Date.now();
-    
-    // Проверяем, активен ли еще бустер
-    if (user.boosterEndTime && user.boosterEndTime <= now) {
-      // Бустер истек, сбрасываем его эффекты
-      const updates: any = {
-        activeBoosterType: null,
-        boosterEndTime: null
-      };
-      
-      // Сбрасываем соответствующие множители в зависимости от типа бустера
-      if (user.productionMultiplier && user.productionMultiplier > 1) {
-        updates.productionMultiplier = 1;
-      }
-      
-      if (user.clickMultiplier && user.clickMultiplier > 1) {
-        updates.clickMultiplier = 1;
-      }
-      
-      if (user.researchMultiplier && user.researchMultiplier > 1) {
-        updates.researchMultiplier = 1;
-      }
-      
-      if (user.sellMultiplier && user.sellMultiplier > 1) {
-        updates.sellMultiplier = 1;
-      }
-      
-      await ctx.db.patch(args.userId, updates);
-      
-      // Записываем в статистику
+
+    // Проверяем, не истек ли бустер
+    if (
+      user.activeBoosterType &&
+      user.boosterEndTime &&
+      user.boosterEndTime <= now
+    ) {
+      // Сбрасываем бустер
+      await ctx.db.patch(args.userId, {
+        activeBoosterType: undefined,
+        activeBoosterName: undefined,
+        boosterEndTime: undefined,
+        productionMultiplier: 1,
+        clickMultiplier: 1,
+      });
+
+      // Логируем окончание действия бустера
       await ctx.db.insert("statistics", {
         userId: args.userId,
         event: "booster_expired",
-        value: 0,
         timestamp: now,
+        value: 0,
         metadata: JSON.stringify({
-          boosterType: user.activeBoosterType
-        })
+          boosterType: user.activeBoosterType,
+          boosterName: user.activeBoosterName,
+        }),
       });
     }
   },
@@ -255,16 +238,70 @@ export const updateBoostersStatus = internalMutation({
  */
 export const getUsersWithActiveBoosters = internalQuery({
   args: {},
-  returns: v.array(v.object({
-    _id: v.id("users"),
-    boosterEndTime: v.optional(v.number()),
-    activeBoosterType: v.optional(v.string()),
-  })),
+  returns: v.array(
+    v.object({
+      _id: v.id("users"),
+      boosterEndTime: v.optional(v.number()),
+      activeBoosterType: v.optional(v.string()),
+    })
+  ),
   handler: async (ctx) => {
     const now = Date.now();
     return await ctx.db
       .query("users")
-      .filter(q => q.gt(q.field("boosterEndTime"), now))
+      .filter((q) => q.gt(q.field("boosterEndTime"), now))
       .collect();
+  },
+});
+
+/**
+ * Установить время следующего бонуса от спутника
+ */
+export const setNextSatelliteBonus = internalMutation({
+  args: {
+    userId: v.id("users"),
+    nextBonusTime: v.number(),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.userId, {
+      nextSatelliteBonusTime: args.nextBonusTime,
+    });
+  },
+});
+
+/**
+ * Получение ежедневного бонуса
+ */
+export const claimDailyBonus = mutation({
+  args: {
+    userId: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user) throw new Error("Пользователь не найден");
+
+    const now = Date.now();
+    const oneDayMs = 24 * 60 * 60 * 1000;
+
+    // Проверяем, доступен ли бонус
+    if (user.dailyBonusClaimed) {
+      return { success: false };
+    }
+
+    // Обновляем счетчик серии
+    const streak = (user.bonusStreak || 0) + 1;
+
+    // Рассчитываем бонус (увеличивается с длиной серии)
+    const baseAmount = 100;
+    const amount = baseAmount + (streak - 1) * 50;
+
+    // Обновляем пользователя
+    await ctx.db.patch(args.userId, {
+      energons: (user.energons || 0) + amount,
+      dailyBonusClaimed: true,
+      bonusStreak: streak,
+    });
+
+    return { success: true, amount, streak };
   },
 });

@@ -61,6 +61,7 @@ export const updateLeaderboard = internalMutation({
 // Получение рейтинга пользователей
 export const getUsersLeaderboard = query({
   args: {
+    type: v.optional(v.string()),
     limit: v.number(),
   },
   handler: async (ctx, args) => {
@@ -77,6 +78,7 @@ export const getUsersLeaderboard = query({
 export const getUserLeaderboardPosition = query({
   args: {
     userId: v.id("users"),
+    type: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const user = await ctx.db.get(args.userId);
@@ -92,6 +94,8 @@ export const getUserLeaderboardPosition = query({
       position: usersAbove.length + 1,
       totalProduction: user.totalProduction,
       energons: user.energons,
+      neutrons: user.neutrons || 0,
+      particles: user.particles || 0,
     };
   },
 });

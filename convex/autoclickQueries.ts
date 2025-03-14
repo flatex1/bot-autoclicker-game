@@ -24,7 +24,8 @@ export const getActiveProducers = internalQuery({
       _id: user._id,
       telegramId: user.telegramId,
       totalProduction: user.totalProduction,
-      productionMultiplier: user.productionMultiplier || 1
+      productionMultiplier: user.productionMultiplier || 1,
+      nextSatelliteBonusTime: user.nextSatelliteBonusTime,
     }));
   },
 });

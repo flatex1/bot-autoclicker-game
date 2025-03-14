@@ -22,6 +22,7 @@ export const getAvailableBoosters = query({
         particles: v.optional(v.number()),
       }),
       duration: v.number(),
+      image: v.optional(v.string()),
     })
   ),
   handler: async (ctx, args) => {
@@ -31,32 +32,43 @@ export const getAvailableBoosters = query({
       throw new Error("Пользователь не найден");
     }
 
-    // Список всех доступных бустеров
-    return [
-      {
-        name: "Ускоритель частиц",
-        description: "Увеличивает производство на 50% на 30 минут",
-        type: "production_boost",
-        cost: {
-          energons: 1000,
-          neutrons: undefined,
-          particles: undefined,
-        },
-        duration: 30 * 60, // 30 минут в секундах
-      },
-      {
-        name: "Нейронный усилитель",
-        description: "Удваивает мощность клика на 15 минут",
-        type: "click_boost",
-        cost: { 
-          energons: 500,
-          neutrons: undefined,
-          particles: undefined
-        },
-        duration: 15 * 60,
-      },
-      // Другие бустеры
-    ];
+    // Получаем доступные комплексы для проверки требований
+    const complexes = await ctx.db
+      .query("complexes")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .collect();
+
+    // Список всех доступных бустеров из конфигурации
+    const boosters = [];
+
+    for (const [type, config] of Object.entries(BOOSTER_CONFIGS)) {
+      // Проверяем, соответствует ли пользователь требованиям
+      let isAvailable = true;
+
+      if (config.requiredComplex) {
+        const requiredComplex = complexes.find(
+          (c) =>
+            c.type === config.requiredComplex &&
+            c.level >= (config.requiredLevel || 1)
+        );
+        if (!requiredComplex) {
+          isAvailable = false;
+        }
+      }
+
+      if (isAvailable) {
+        boosters.push({
+          name: config.name,
+          description: config.description,
+          type: type,
+          cost: config.cost,
+          duration: config.duration,
+          image: config.image,
+        });
+      }
+    }
+
+    return boosters;
   },
 });
 
@@ -66,73 +78,92 @@ export const activateBooster = mutation({
     userId: v.id("users"),
     boosterType: v.string(),
   },
-  returns: v.object({
-    success: v.boolean(),
-    error: v.optional(v.string()),
-  }),
   handler: async (ctx, args) => {
-    // Получаем пользователя
     const user = await ctx.db.get(args.userId);
-    if (!user) {
-      return { success: false, error: "Пользователь не найден" };
-    }
+    if (!user) throw new Error("Пользователь не найден");
 
-    // Проверяем, есть ли уже активный бустер
+    // Проверяем, что нет активного бустера
     if (user.activeBoosterType) {
-      return { 
-        success: false, 
-        error: "У вас уже есть активная разработка" 
-      };
+      return { success: false, error: "У вас уже активирован бустер" };
     }
 
-    // Получаем информацию о бустере
-    const boosters = await ctx.runQuery(api.game.getAvailableBoosters, {
-      userId: args.userId,
-    });
-
-    const booster = boosters.find(b => b.type === args.boosterType);
-    if (!booster) {
-      return { success: false, error: "Разработка не найдена" };
+    // Получаем конфигурацию бустера
+    const boosterConfig =
+      BOOSTER_CONFIGS[args.boosterType as keyof typeof BOOSTER_CONFIGS];
+    if (!boosterConfig) {
+      return { success: false, error: "Бустер не найден" };
     }
 
-    // Проверяем, хватает ли ресурсов
-    if (user.energons < booster.cost.energons) {
+    // Проверяем достаточно ли ресурсов
+    if (user.energons < boosterConfig.cost.energons) {
       return { success: false, error: "Недостаточно энергонов" };
     }
 
-    if (booster.cost.neutrons && user.neutrons < booster.cost.neutrons) {
+    if (
+      boosterConfig.cost.neutrons !== undefined &&
+      user.neutrons < boosterConfig.cost.neutrons
+    ) {
       return { success: false, error: "Недостаточно нейтронов" };
     }
 
-    if (booster.cost.particles && user.particles < booster.cost.particles) {
+    if (
+      boosterConfig.cost.particles !== undefined &&
+      user.particles < boosterConfig.cost.particles
+    ) {
       return { success: false, error: "Недостаточно квантовых частиц" };
     }
 
-    // Списываем ресурсы
-    const update: any = {
-      energons: user.energons - booster.cost.energons,
+    // Сохраняем начальные значения мультипликаторов
+    const baseProductionMultiplier = user.productionMultiplier || 1;
+    const baseClickMultiplier = user.clickMultiplier || 1;
+    
+    // Рассчитываем новые мультипликаторы в зависимости от типа бустера
+    let newProductionMultiplier = baseProductionMultiplier;
+    let newClickMultiplier = baseClickMultiplier;
+
+    if (args.boosterType.includes("production") || ["PROTON-M87", "RED-STAR"].includes(args.boosterType)) {
+      newProductionMultiplier = baseProductionMultiplier * boosterConfig.multiplier;
+    } else if (args.boosterType.includes("click") || ["ATOMIC-HEART-42", "IRON-COMRADE"].includes(args.boosterType)) {
+      newClickMultiplier = baseClickMultiplier * boosterConfig.multiplier;
+    } else if (args.boosterType === "T-POLYMER") {
+      // Особый бустер, который увеличивает все
+      newProductionMultiplier = baseProductionMultiplier * 1.5;
+      newClickMultiplier = baseClickMultiplier * 1.5;
+    }
+
+    // Вычитаем стоимость бустера
+    await ctx.db.patch(args.userId, {
+      energons: user.energons - boosterConfig.cost.energons,
+      neutrons: (user.neutrons || 0) - (boosterConfig.cost.neutrons || 0),
+      particles: (user.particles || 0) - (boosterConfig.cost.particles || 0),
+
+      // Сохраняем информацию о бустере
       activeBoosterType: args.boosterType,
-      boosterEndTime: Date.now() + booster.duration * 1000,
+      activeBoosterName: boosterConfig.name,
+      boosterEndTime: Date.now() + boosterConfig.duration * 1000,
+
+      // Устанавливаем множители в зависимости от типа бустера
+      productionMultiplier: newProductionMultiplier,
+      clickMultiplier: newClickMultiplier
+    });
+
+    // Логируем активацию бустера
+    await ctx.db.insert("statistics", {
+      userId: args.userId,
+      event: "booster_activated",
+      timestamp: Date.now(),
+      value: 0,
+      metadata: JSON.stringify({
+        boosterType: args.boosterType,
+        boosterName: boosterConfig.name,
+        duration: boosterConfig.duration,
+      }),
+    });
+
+    return {
+      success: true,
+      duration: boosterConfig.duration,
+      boosterName: boosterConfig.name,
     };
-
-    if (booster.cost.neutrons) {
-      update.neutrons = user.neutrons - booster.cost.neutrons;
-    }
-
-    if (booster.cost.particles) {
-      update.particles = user.particles - booster.cost.particles;
-    }
-
-    // Применяем эффекты бустера
-    if (args.boosterType === "production_boost") {
-      update.productionMultiplier = 1.5;
-    } else if (args.boosterType === "click_boost") {
-      update.clickMultiplier = 2;
-    }
-
-    // Обновляем пользователя
-    await ctx.db.patch(args.userId, update);
-
-    return { success: true };
   },
 });

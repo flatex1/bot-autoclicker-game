@@ -13,43 +13,42 @@ export default defineSchema({
     username: v.optional(v.string()), // Имя пользователя в Telegram
     firstName: v.optional(v.string()), // Имя пользователя
     lastName: v.optional(v.string()), // Фамилия пользователя
-    
+
     // Основные ресурсы
     energons: v.number(), // Основная валюта
     neutrons: v.number(), // Вторичная валюта
     particles: v.number(), // Престижная валюта
-    
+
     // Статистика производства
     totalProduction: v.number(), // Общее производство в секунду
     productionMultiplier: v.optional(v.number()), // Множитель производства
-    
+
     // Статистика кликов
     totalClicks: v.number(), // Общее количество кликов
     manualClicks: v.number(), // Количество ручных кликов
     clickMultiplier: v.optional(v.number()), // Множитель кликов
-    
+
     // Статистика игровой активности
     lastActivity: v.number(), // Время последней активности
     createdAt: v.number(), // Время создания аккаунта
-    
+
     // Бустеры
     activeBoosterType: v.optional(v.string()), // Тип активного бустера
+    activeBoosterName: v.optional(v.string()), // Имя активного бустера для отображения
     boosterEndTime: v.optional(v.number()), // Время окончания действия бустера
-    researchMultiplier: v.optional(v.number()), // Множитель исследований
-    sellMultiplier: v.optional(v.number()), // Множитель продажи ресурсов
-    
+
     // Бонусы
     dailyBonusClaimed: v.boolean(), // Получен ли ежедневный бонус
     bonusStreak: v.number(), // Сколько дней подряд получен бонус
     nextSatelliteBonusTime: v.optional(v.number()), // Время следующего бонуса от спутника
-    
+
     // Административное
     banned: v.boolean(), // Забанен ли пользователь
     isAdmin: v.boolean(), // Является ли пользователь администратором
   })
-  .index("by_telegramId", ["telegramId"]) // Для быстрого поиска по Telegram ID
-  .index("by_totalProduction", ["totalProduction"]), // Для сортировки по производству
-  
+    .index("by_telegramId", ["telegramId"]) // Для быстрого поиска по Telegram ID
+    .index("by_totalProduction", ["totalProduction"]), // Для сортировки по производству
+
   // Таблица комплексов - научные и производственные комплексы игроков
   complexes: defineTable({
     userId: v.id("users"), // ID пользователя
@@ -59,9 +58,9 @@ export default defineSchema({
     lastUpgraded: v.number(), // Время последнего улучшения
     createdAt: v.number(), // Время создания
   })
-  .index("by_userId", ["userId"]) // Для поиска всех комплексов пользователя
-  .index("by_userAndType", ["userId", "type"]), // Для поиска конкретного комплекса пользователя
-  
+    .index("by_userId", ["userId"]) // Для поиска всех комплексов пользователя
+    .index("by_userAndType", ["userId", "type"]), // Для поиска конкретного комплекса пользователя
+
   // Таблица рейтинга - для быстрого доступа к отсортированным данным
   leaderboard: defineTable({
     userId: v.id("users"), // ID пользователя
@@ -74,10 +73,10 @@ export default defineSchema({
     createdAt: v.number(), // Время создания записи
     updatedAt: v.number(), // Время обновления записи
   })
-  .index("by_userId", ["userId"]) // Для поиска записи конкретного пользователя
-  .index("by_energons", ["energons"]) // Для сортировки по энергонам
-  .index("by_totalProduction", ["totalProduction"]), // Для сортировки по производству
-  
+    .index("by_userId", ["userId"]) // Для поиска записи конкретного пользователя
+    .index("by_energons", ["energons"]) // Для сортировки по энергонам
+    .index("by_totalProduction", ["totalProduction"]), // Для сортировки по производству
+
   // Таблица статистики - для отслеживания активности пользователей
   statistics: defineTable({
     userId: v.id("users"), // ID пользователя
@@ -86,9 +85,9 @@ export default defineSchema({
     timestamp: v.number(), // Время события
     metadata: v.optional(v.string()), // Дополнительные данные в JSON
   })
-  .index("by_userId", ["userId"]) // Для поиска всех событий пользователя
-  .index("by_timestamp", ["timestamp"]), // Для сортировки по времени
-  
+    .index("by_userId", ["userId"]) // Для поиска всех событий пользователя
+    .index("by_timestamp", ["timestamp"]), // Для сортировки по времени
+
   // Таблица сессий - для хранения состояния диалога с ботом
   sessions: defineTable({
     userId: v.id("users"), // ID пользователя
@@ -97,29 +96,27 @@ export default defineSchema({
     data: v.optional(v.string()), // Данные сессии в JSON
     updatedAt: v.number(), // Время обновления
   })
-  .index("by_userId", ["userId"]) // Для поиска сессии пользователя
-  .index("by_chatId", ["chatId"]), // Для поиска по ID чата
-  
+    .index("by_userId", ["userId"]) // Для поиска сессии пользователя
+    .index("by_chatId", ["chatId"]), // Для поиска по ID чата
+
   // Таблица промокодов
   promoCodes: defineTable({
     code: v.string(), // Код промокода
     reward: v.object({
       energons: v.optional(v.number()),
       neutrons: v.optional(v.number()),
-      particles: v.optional(v.number())
+      particles: v.optional(v.number()),
     }), // Награда (ресурсы)
     usageLimit: v.number(), // Лимит использований
     usedCount: v.number(), // Количество использований
     expiresAt: v.optional(v.number()), // Время истечения
     createdAt: v.number(), // Время создания
-  })
-  .index("by_code", ["code"]), // Для быстрого поиска по коду
+  }).index("by_code", ["code"]), // Для быстрого поиска по коду
 
   // Таблица использованных промокодов
   promoUsage: defineTable({
     userId: v.id("users"),
     promoId: v.id("promoCodes"),
     usedAt: v.number(),
-  })
-  .index("by_user_and_promo", ["userId", "promoId"]), // Для проверки использования
-}); 
+  }).index("by_user_and_promo", ["userId", "promoId"]), // Для проверки использования
+});

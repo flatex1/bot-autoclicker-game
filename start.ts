@@ -59,7 +59,7 @@ function validateEnvironment() {
 loadEnvironmentVariables();
 
 // Импортируем бота только после загрузки переменных окружения
-const bot = await import('./bot.js');
+await import('./bot.js');
 
 // Обработка завершения процесса
 process.on('SIGINT', () => {
@@ -73,4 +73,3 @@ process.on('unhandledRejection', (reason) => {
 
 // Запускаем бота
 console.log('Запуск бота...');
-bot.default.start();
